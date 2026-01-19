@@ -1,0 +1,219 @@
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
+from langgraph.store.memory import InMemoryStore
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langmem import create_manage_memory_tool, create_search_memory_tool
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.agents import create_agent
+import uuid
+import os
+import asyncio
+import sys
+from datetime import datetime, timedelta
+
+# new helper module (use absolute import so agent.py can be run directly)
+from memory_store import add_task, get_tasks, parse_time_from_text, delete_task
+
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
+
+if "GEMINI_API_KEY" not in os.environ:
+    os.environ["GEMINI_API_KEY"] = os.getenv("GEMINI_API_KEY")
+
+# model/store setup (kept, minimal edits)
+embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
+store = InMemoryStore(index={"dims": 1536, "embed": embeddings})
+user_id = "2"
+namespace = (user_id, "memories")
+tools = [create_manage_memory_tool(namespace), create_search_memory_tool(namespace)]
+model = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=1.0, max_tokens=None, timeout=None, max_retries=2)
+agent = create_agent(model, tools=tools, store=store, system_prompt="You are a helpful dementia patient assistant. help me with reminding of the daily tasks.")
+
+# seed example memory (non-fatal)
+try:
+    memory_id = str(uuid.uuid4())
+    memory = {"task1": "i am having a meeting at 5pm today."}
+    store.put(namespace, memory_id, memory)
+except Exception:
+    pass
+
+# FastAPI app
+app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # adjust for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# small helper for agent.invoke running off the event loop
+async def safe_agent_invoke(prompt: str):
+    try:
+        if getattr(sys, "is_finalizing", lambda: False)():
+            return "Task saved."
+        def invoke():
+            try:
+                rs = agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+                return rs
+            except Exception:
+                return None
+        result_state = await asyncio.to_thread(invoke)
+        if not result_state:
+            return "Task saved."
+        # try to extract content
+        try:
+            return result_state["messages"][-1].content
+        except Exception:
+            return "Task saved."
+    except RuntimeError:
+        return "Task saved."
+    except Exception:
+        return "Task saved."
+
+# API models
+class TaskIn(BaseModel):
+    text: str
+
+@app.post("/api/tasks")
+async def api_add_task(payload: TaskIn):
+    if not payload.text or not payload.text.strip():
+        raise HTTPException(status_code=400, detail="text required")
+    now = datetime.now()
+    scheduled = parse_time_from_text(payload.text, now=now)
+    entry = add_task(store, namespace, payload.text, scheduled_dt=scheduled)
+    reply = await safe_agent_invoke(f"Store this memory: {payload.text}")
+    return {"entry": entry, "reply": reply}
+
+@app.get("/api/reminders")
+async def api_check_reminders(window: int = Query(60, gt=0)):
+    now = datetime.now()
+    tasks = get_tasks(namespace)
+    upcoming = []
+    overdue = []
+    future_all = []
+    unscheduled = []
+    all_tasks = []
+    for t in tasks:
+        # prepare an entry for the "all" list (keep created_at if available)
+        # ensure every task we send back has a stable id (fallback via uuid5 if missing)
+        safe_id = t.get("id")
+        if not safe_id:
+            # deterministic fallback id using task text + created_at so UI gets a key even for legacy entries
+            safe_id = str(uuid.uuid5(uuid.NAMESPACE_URL, (t.get("text") or "") + "|" + (t.get("created_at") or "")))
+        all_tasks.append({
+            "id": safe_id,
+            "text": t.get("text"),
+            "scheduled": t.get("scheduled"),
+            "created_at": t.get("created_at")
+        })
+        sched = t.get("scheduled")
+        if not sched:
+            unscheduled.append(t.get("text"))
+            continue
+        try:
+            dt = datetime.fromisoformat(sched)
+        except Exception:
+            unscheduled.append(t.get("text"))
+            continue
+        if dt <= now:
+            overdue.append({"text": t["text"], "at": dt.isoformat()})
+        else:
+            future_all.append({"text": t["text"], "at": dt.isoformat(), "dt": dt})
+            if dt <= now + timedelta(minutes=window):
+                upcoming.append({"text": t["text"], "at": dt.isoformat()})
+    # sort all_tasks by created_at descending if available
+    try:
+        all_tasks_sorted = sorted(
+            all_tasks,
+            key=lambda x: x.get("created_at") or "",
+            reverse=True
+        )
+    except Exception:
+        all_tasks_sorted = all_tasks
+    if overdue or upcoming:
+        return {"overdue": overdue, "upcoming": upcoming, "all": all_tasks_sorted}
+    # fallback
+    if future_all:
+        next_item = min(future_all, key=lambda x: x["dt"])
+        return {"message": f"No reminders in window. Next: {next_item['text']} at {next_item['at']}", "all": all_tasks_sorted}
+    if unscheduled:
+        return {"message": "No scheduled reminders. Unscheduled tasks: " + "; ".join(unscheduled), "all": all_tasks_sorted}
+    return {"message": "No reminders scheduled.", "all": all_tasks_sorted}
+
+# server-session notified set to avoid repeated notifications during a session
+_notified = set()
+AUTO_WINDOW_MINUTES = 5
+
+@app.get("/api/notifications")
+async def api_notifications():
+    now = datetime.now()
+    tasks = get_tasks(namespace)
+    out = []
+    for t in tasks:
+        sched = t.get("scheduled")
+        if not sched:
+            continue
+        try:
+            dt = datetime.fromisoformat(sched)
+        except Exception:
+            continue
+        key = (t.get("id"), sched)
+        if key in _notified:
+            continue
+        if dt <= now:
+            out.append({"type": "overdue", "text": t["text"], "at": dt.isoformat()})
+            _notified.add(key)
+        elif dt <= now + timedelta(minutes=AUTO_WINDOW_MINUTES):
+            out.append({"type": "upcoming", "text": t["text"], "at": dt.isoformat()})
+            _notified.add(key)
+    return {"notifications": out}
+
+# new endpoint to delete a task by id
+@app.delete("/api/tasks/{task_id}")
+async def api_delete_task(task_id: str):
+    ok = delete_task(store, namespace, task_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="task not found")
+    return {"deleted": True}
+
+if __name__ == "__main__":
+    import socket
+    import errno
+
+    HOST = os.getenv("HOST", "0.0.0.0")
+    START_PORT = int(os.getenv("PORT", "8000"))
+    MAX_PORT = START_PORT + 1000
+
+    def _is_port_free(host, port):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind((host, port))
+            s.close()
+            return True
+        except OSError:
+            try:
+                s.close()
+            except Exception:
+                pass
+            return False
+
+    chosen_port = None
+    if _is_port_free(HOST, START_PORT):
+        chosen_port = START_PORT
+    else:
+        for p in range(START_PORT + 1, MAX_PORT + 1):
+            if _is_port_free(HOST, p):
+                chosen_port = p
+                break
+
+    if chosen_port is None:
+        raise RuntimeError(f"No free port found in range {START_PORT}-{MAX_PORT}")
+
+    print(f"Starting server on http://{HOST}:{chosen_port} (requested PORT={START_PORT})")
+    uvicorn.run("agent:app", host=HOST, port=chosen_port, reload=False)
+
