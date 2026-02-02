@@ -1,4 +1,4 @@
-const BASE = "http://localhost:8001/api";
+const BASE = "http://localhost:8000/api";
 
 export async function addTask(text) {
   const res = await fetch(`${BASE}/tasks`, {

@@ -10,43 +10,38 @@ export default function App() {
   const [recentTasks, setRecentTasks] = useState([]);
   const [notifCount, setNotifCount] = useState(0);
   const [showNotifPanel, setShowNotifPanel] = useState(false);
+  const [email, setEmail] = useState(localStorage.getItem("reminderEmail") || "");
+  const [emailStatus, setEmailStatus] = useState("");
   const notifRef = useRef(null);
 
   useEffect(() => {
-    // request Notification permission on load
     if (typeof Notification !== "undefined" && Notification.permission !== "granted") {
       Notification.requestPermission();
     }
-    // polling for notifications
+
     const id = setInterval(async () => {
       try {
         const r = await getNotifications();
-        if (r && r.notifications && r.notifications.length) {
-          // add new notifications to top
+        if (r?.notifications?.length) {
           setNotifications((prev) => [...r.notifications.reverse(), ...prev]);
           setNotifCount((c) => c + r.notifications.length);
-          // desktop notifications
           r.notifications.forEach((n) => {
-            if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+            if (Notification.permission === "granted") {
               new Notification(n.type === "overdue" ? "Overdue reminder" : "Upcoming reminder", {
                 body: `${n.text} • ${new Date(n.at).toLocaleString()}`,
-                silent: false,
               });
             }
           });
         }
-      } catch (e) {
-        // ignore probe errors
-      }
+      } catch (e) {}
     }, 1000 * 25);
+
     return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
-    // small animation when new notifs appear
     if (notifRef.current) {
       notifRef.current.classList.remove("pulse");
-      // trigger reflow
       void notifRef.current.offsetWidth;
       notifRef.current.classList.add("pulse");
     }
@@ -63,7 +58,6 @@ export default function App() {
       const res = await addTask(text);
       setStatus(res.reply || "Saved");
       setText("");
-      // optimistic local reminder preview
       setTimeout(() => handleCheck(), 400);
     } catch (err) {
       setStatus("Error saving");
@@ -74,36 +68,26 @@ export default function App() {
     setReminders("Checking...");
     try {
       const res = await getReminders(60);
-      if (res.overdue || res.upcoming) {
-        const parts = [];
-        if (res.overdue && res.overdue.length) {
-          parts.push("Overdue:");
-          res.overdue.forEach((o) => parts.push(`• ${o.text} — was at ${new Date(o.at).toLocaleString()}`));
-        }
-        if (res.upcoming && res.upcoming.length) {
-          parts.push("Upcoming:");
-          res.upcoming.forEach((o) => parts.push(`• ${o.text} — at ${new Date(o.at).toLocaleString()}`));
-        }
-        if (res.all && res.all.length) {
-          setRecentTasks(res.all);
-          parts.push("");
-          parts.push("Recent tasks:");
-          res.all.slice(0, 6).forEach(a => {
-            const sched = a.scheduled ? ` — ${new Date(a.scheduled).toLocaleString()}` : " — (unscheduled)";
-            parts.push(`• ${a.text}${sched}`);
-          });
-        }
-        setReminders(parts.join("\n"));
-      } else {
-        let msg = res.message || "No reminders";
-        if (res.all && res.all.length) {
-          setRecentTasks(res.all);
-          msg += "\n\nRecent tasks:\n" + res.all.slice(0,6).map(a => `• ${a.text}${a.scheduled ? ` — ${new Date(a.scheduled).toLocaleString()}` : " — (unscheduled)"}`).join("\n");
-        }
-        setReminders(msg);
+      const parts = [];
+      if (res.overdue?.length) {
+        parts.push("Overdue:");
+        res.overdue.forEach((o) => parts.push(`• ${o.text} — was at ${new Date(o.at).toLocaleString()}`));
       }
+      if (res.upcoming?.length) {
+        parts.push("Upcoming:");
+        res.upcoming.forEach((o) => parts.push(`• ${o.text} — at ${new Date(o.at).toLocaleString()}`));
+      }
+      if (res.all?.length) {
+        setRecentTasks(res.all);
+        parts.push("\nRecent tasks:");
+        res.all.slice(0, 8).forEach((a) => {
+          const sched = a.scheduled ? ` — ${new Date(a.scheduled).toLocaleString()}` : " — (unscheduled)";
+          parts.push(`• ${a.text}${sched}`);
+        });
+      }
+      setReminders(parts.join("\n") || "No reminders yet.");
     } catch {
-      setReminders("Error");
+      setReminders("Error loading reminders.");
     }
   }
 
@@ -111,12 +95,21 @@ export default function App() {
     try {
       await deleteTask(id);
       setStatus("Deleted");
-      // refresh reminders and recent tasks
-      await handleCheck();
+      handleCheck();
     } catch (e) {
       setStatus("Delete failed");
     }
   }
+
+  const saveEmail = () => {
+    if (!email.trim() || !email.includes("@")) {
+      setEmailStatus("Please enter a valid email");
+      return;
+    }
+    localStorage.setItem("reminderEmail", email.trim());
+    setEmailStatus("Email saved ✓");
+    setTimeout(() => setEmailStatus(""), 2500);
+  };
 
   return (
     <div className="app-shell">
@@ -130,14 +123,7 @@ export default function App() {
             </div>
           </div>
           <div className="notif-area">
-            <button
-              className="notif-btn"
-              onClick={() => {
-                setShowNotifPanel((s) => !s);
-                setNotifCount(0);
-              }}
-              aria-label="Notifications"
-            >
+            <button className="notif-btn" onClick={() => { setShowNotifPanel(!showNotifPanel); setNotifCount(0); }} aria-label="Notifications">
               🔔
               <span ref={notifRef} className={`notif-badge ${notifCount ? "visible" : ""}`}>{notifCount || ""}</span>
             </button>
@@ -163,15 +149,42 @@ export default function App() {
           </form>
         </section>
 
+        {/* New Email Section */}
+        <section className="card input-card" style={{ marginTop: "1rem" }}>
+          <label className="label">Your Email for Reminders</label>
+          <input
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="you@example.com"
+            className="task-input"
+            style={{ height: "auto", minHeight: "44px" }}
+          />
+          <div className="row" style={{ marginTop: "10px" }}>
+            <button className="btn primary" type="button" onClick={saveEmail}>
+              Save Email
+            </button>
+            <div className="status">{emailStatus}</div>
+          </div>
+          <p style={{ fontSize: "13px", color: "var(--muted)", marginTop: 8 }}>
+            Reminders will be sent here when tasks are due.
+          </p>
+          {email && (
+            <p style={{ fontSize: "13px", color: "var(--muted)", marginTop: 8 }}>
+              Currently sending to: <strong>{email}</strong>
+            </p>
+          )}
+        </section>
+
         <section className="card reminders-card">
           <h3>Reminders</h3>
-          <pre className="reminder-box">{reminders || "No reminders loaded yet. Click 'Check Reminders'."}</pre>
-          {recentTasks && recentTasks.length > 0 && (
-            <div style={{marginTop:12}}>
+          <pre className="reminder-box">{reminders || "No reminders loaded yet."}</pre>
+          {recentTasks.length > 0 && (
+            <div style={{ marginTop: 12 }}>
               <h4>Recent tasks</h4>
-              <ul style={{margin:0, paddingLeft:18}}>
-                {recentTasks.slice(0,8).map((r) => (
-                  <li key={r.id} style={{display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, marginBottom:6}}>
+              <ul style={{ margin: 0, paddingLeft: 18 }}>
+                {recentTasks.slice(0, 8).map((r) => (
+                  <li key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <span>{r.text}{r.scheduled ? ` — ${new Date(r.scheduled).toLocaleString()}` : " — (unscheduled)"}</span>
                     <button className="btn ghost" onClick={() => handleDeleteTask(r.id)}>Delete</button>
                   </li>
