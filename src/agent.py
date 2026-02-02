@@ -28,6 +28,7 @@ embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
 store = InMemoryStore(index={"dims": 1536, "embed": embeddings})
 user_id = "2"
 namespace = (user_id, "memories")
+
 tools = [create_manage_memory_tool(namespace), create_search_memory_tool(namespace)]
 model = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=1.0, max_tokens=None, timeout=None, max_retries=2)
 agent = create_agent(model, tools=tools, store=store, system_prompt="You are a helpful dementia patient assistant. help me with reminding of the daily tasks.")
