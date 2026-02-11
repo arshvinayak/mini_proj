@@ -9,11 +9,27 @@ import time
 import os
 import smtplib
 import ssl
-from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
 from dotenv import load_dotenv
+
+# ------------------------------------------------------
+import datetime
+import sys
+
+class OffsetDateTime(datetime.datetime):
+    _offset = datetime.timedelta(0)
+    @classmethod
+    def now(cls, tz=None):
+        return super().now(tz) + cls._offset
+
+datetime.datetime = OffsetDateTime
+
+if len(sys.argv) > 1:
+    fake = datetime.datetime.fromisoformat(sys.argv[1].replace(" ", "T"))
+    OffsetDateTime._offset = fake - datetime.datetime.now()
+# ------------------------------------------------------
 
 load_dotenv()
 
@@ -31,7 +47,7 @@ SMTP_PORT       = 465
 NAMESPACE   = "('2', 'memories')"   # must match your agent.py  
 MEMORY_FILE = Path("/workspaces/mini_proj/data/memories.json")  # adjust if needed
 
-CHECK_INTERVAL_SECONDS = 10   # 5 minutes
+CHECK_INTERVAL_SECONDS = 60   # 5 minutes
 GRACE_PERIOD_MINUTES   = 15    # consider task "due" up to 15 min in future too
 
 # ──────────────────────────────────────────────
@@ -94,7 +110,7 @@ def send_email(subject: str, body: str):
 
 def process_reminders():
     """Main check logic — called periodically"""
-    now = datetime.now()
+    now = datetime.datetime.now()
     tasks = load_tasks()
     if not tasks:
         print(f"{now:%Y-%m-%d %H:%M:%S}  No tasks found.")
@@ -113,12 +129,12 @@ def process_reminders():
             continue
 
         try:
-            due = datetime.fromisoformat(sched_str)
+            due = datetime.datetime.fromisoformat(sched_str)
         except:
             continue
 
         # Task is due now or soon / already overdue
-        if due <= now + timedelta(minutes=GRACE_PERIOD_MINUTES):
+        if due <= now + datetime.timedelta(minutes=GRACE_PERIOD_MINUTES):
             is_overdue = due < now
             subject = "🔔 Overdue Reminder" if is_overdue else "⏰ Reminder"
             
@@ -133,7 +149,7 @@ def process_reminders():
 
             if send_email(subject, body):
                 task["sent"] = True
-                task["sent_at"] = datetime.now().isoformat()
+                task["sent_at"] = datetime.datetime.now().isoformat()
                 updated = True
                 sent_count += 1
 
@@ -148,7 +164,7 @@ def process_reminders():
 
 def main():
     print("Reminder background service started")
-    print(datetime.now().strftime("Started at %Y-%m-%d %H:%M:%S"))
+    print(datetime.datetime.now().strftime("Started at %Y-%m-%d %H:%M:%S"))
     print(f"  • Memory file:   {MEMORY_FILE}")
     print(f"  • Recipient:     {RECIPIENT_EMAIL or '(not set)'}")
     print(f"  • Check every:   {CHECK_INTERVAL_SECONDS // 60} minutes")
