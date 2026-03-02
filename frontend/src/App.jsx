@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { addTask, deleteTask, getNotifications, getReminders, send_prompt } from "./api";
 import "./styles.css";
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export default function App() {
   const [text, setText] = useState("");
@@ -21,7 +23,7 @@ export default function App() {
   const messagesEndRef = useRef(null);
   const notifRef = useRef(null);
 
-  // Auto-scroll chat to bottom
+  // Auto-scroll chat
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -130,7 +132,6 @@ export default function App() {
       setMessages((prev) => [...prev, { role: "assistant", content: assistantReply }]);
     } catch (err) {
       console.log(err);
-
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: "Sorry — connection issue. Try again?" },
@@ -180,7 +181,8 @@ export default function App() {
       </header>
 
       <main className="container">
-        {/* 1. Task input */}
+
+        {/* Task input */}
         <section className="card input-card">
           <form onSubmit={handleAdd}>
             <label className="label">Add a task</label>
@@ -200,7 +202,7 @@ export default function App() {
           </form>
         </section>
 
-        {/* 2. Reminders */}
+        {/* Reminders */}
         <section className="card reminders-card">
           <h3>Reminders</h3>
           <pre className="reminder-box">{reminders || "No reminders loaded yet."}</pre>
@@ -210,12 +212,12 @@ export default function App() {
               <h4>Recent tasks</h4>
               <ul style={{ margin: 0, paddingLeft: 18 }}>
                 {recentTasks.slice(0, 8).map((r) => (
-                  <li key={r.id} className="task-item">
+                  <li key={r.id} style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span>
                       {r.text}
                       {r.scheduled ? ` — ${new Date(r.scheduled).toLocaleString()}` : " — (unscheduled)"}
                     </span>
-                    <button className="btn ghost small" onClick={() => handleDeleteTask(r.id)}>
+                    <button className="btn ghost" onClick={() => handleDeleteTask(r.id)}>
                       Delete
                     </button>
                   </li>
@@ -225,7 +227,7 @@ export default function App() {
           )}
         </section>
 
-        {/* 3. Notifications */}
+        {/* Notifications */}
         <section className="card notifications-card">
           <h3>Recent Notifications</h3>
           <div className="notif-list">
@@ -245,7 +247,7 @@ export default function App() {
           </div>
         </section>
 
-        {/* 4. AI Assistant — now at the bottom */}
+        {/* ── AI Assistant ── now at the bottom ──────── */}
         <section className="card chat-card">
           <h3>AI Assistant</h3>
 
@@ -260,14 +262,20 @@ export default function App() {
                   key={index}
                   className={`chat-message ${msg.role === "user" ? "user" : "assistant"}`}
                 >
-                  <div className="chat-bubble">{msg.content}</div>
+                  <div className="chat-bubble">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {msg.content}
+                    </ReactMarkdown>
+                  </div>
                 </div>
               ))
             )}
 
             {isSending && (
               <div className="chat-message assistant">
-                <div className="chat-bubble typing">...</div>
+                <div className="chat-bubble typing">
+                  <span></span><span></span><span></span>
+                </div>
               </div>
             )}
 
@@ -289,13 +297,14 @@ export default function App() {
             />
             <button
               type="submit"
-              className="btn primary send-btn"
+              className="send-btn"
               disabled={isSending || !chatInput.trim()}
             >
               {isSending ? "…" : "→"}
             </button>
           </form>
         </section>
+
       </main>
 
       {/* Floating notification panel */}
