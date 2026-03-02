@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -25,12 +25,19 @@ if "GEMINI_API_KEY" not in os.environ:
 
 # model/store setup (kept, minimal edits)
 embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
-store = InMemoryStore(index={"dims": 1536, "embed": embeddings})
+store = InMemoryStore(index={
+    "dims": 1536, "embed": embeddings})
+
 user_id = "2"
 namespace = (user_id, "memories")
 
-tools = [create_manage_memory_tool(namespace), create_search_memory_tool(namespace)]
-model = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=1.0, max_tokens=None, timeout=None, max_retries=2)
+tools = [
+    create_manage_memory_tool(namespace), 
+    create_search_memory_tool(namespace)
+    ]
+
+model = ChatGoogleGenerativeAI(model="gemini-3-flash-preview", temperature=1.0, max_tokens=None, timeout=None, max_retries=2)
+
 agent = create_agent(model, tools=tools, store=store, system_prompt="You are a helpful dementia patient assistant. help me with reminding of the daily tasks.")
 
 # seed example memory (non-fatal)
@@ -77,6 +84,19 @@ async def safe_agent_invoke(prompt: str):
 
 # API models
 class TaskIn(BaseModel):
+    """
+    TaskIn model for incoming task requests.
+
+    This Pydantic BaseModel represents the input data structure for a task.
+    It is used to validate and serialize incoming task data, ensuring that
+    the required 'text' field is present and correctly typed as a string.
+
+    Attributes:
+        text (str): The task description or input text content.
+    """
+    text: str
+
+class PromptIn(BaseModel):
     text: str
 
 @app.post("/api/tasks")
@@ -88,6 +108,23 @@ async def api_add_task(payload: TaskIn):
     entry = add_task(store, namespace, payload.text, scheduled_dt=scheduled)
     reply = await safe_agent_invoke(f"Store this memory: {payload.text}")
     return {"entry": entry, "reply": reply}
+
+@app.post("/api/prompt")
+async def api_prompt(payload: PromptIn):
+    if not payload.text or not payload.text.strip():
+        raise HTTPException(status_code=400, detail="text required")
+    messages = [
+    (
+        "system",
+        "You are a helpful assistant. the response should be in plain text without any markdown formatting.",
+    ),
+    ("human", payload.text),
+]
+    ai_msg = model.invoke(messages)
+    
+    return ai_msg.text
+
+
 
 @app.get("/api/reminders")
 async def api_check_reminders(window: int = Query(60, gt=0)):
@@ -180,6 +217,7 @@ async def api_delete_task(task_id: str):
     if not ok:
         raise HTTPException(status_code=404, detail="task not found")
     return {"deleted": True}
+
 
 if __name__ == "__main__":
     import socket

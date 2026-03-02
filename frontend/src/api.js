@@ -37,7 +37,6 @@ export async function send_prompt(prompt) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: prompt }),
   });
-
-  console.log(res.json())
+  
   return res.json();
 }

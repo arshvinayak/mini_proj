@@ -124,10 +124,13 @@ export default function App() {
     setIsSending(true);
 
     try {
-      const response = await send_prompt(message);      
-      const assistantReply = response?.reply || response?.text || response || "No reply received";
+      const response = await send_prompt(message);
+      const assistantReply = response || "No reply received";
+      
       setMessages((prev) => [...prev, { role: "assistant", content: assistantReply }]);
     } catch (err) {
+      console.log(err);
+
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: "Sorry — connection issue. Try again?" },
