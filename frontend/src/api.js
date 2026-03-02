@@ -30,3 +30,14 @@ export async function deleteTask(taskId) {
   }
   return res.json();
 }
+
+export async function send_prompt(prompt) {
+  const res = await fetch(`${BASE}/prompt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: prompt }),
+  });
+
+  console.log(res.json())
+  return res.json();
+}
