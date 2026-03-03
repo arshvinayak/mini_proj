@@ -34,19 +34,17 @@ namespace = (user_id, "memories")
 tools = [
     create_manage_memory_tool(namespace), 
     create_search_memory_tool(namespace)
-    ]
+]
 
-model = ChatGoogleGenerativeAI(model="gemini-3-flash-preview", temperature=1.0, max_tokens=None, timeout=None, max_retries=2)
+model = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=1.0)
+agent = create_agent(model, 
+                    tools=tools, 
+                    store=store, 
+                    system_prompt="You are a helpful dementia patient assistant. help me with reminding of the daily tasks.")
 
-agent = create_agent(model, tools=tools, store=store, system_prompt="You are a helpful dementia patient assistant. help me with reminding of the daily tasks.")
-
-# seed example memory (non-fatal)
-try:
-    memory_id = str(uuid.uuid4())
-    memory = {"task1": "i am having a meeting at 5pm today."}
-    store.put(namespace, memory_id, memory)
-except Exception:
-    pass
+print()
+print(store.search(namespace))
+print()
 
 # FastAPI app
 app = FastAPI()
@@ -93,8 +91,12 @@ class TaskIn(BaseModel):
 
     Attributes:
         text (str): The task description or input text content.
+        date (str | None): Optional date in YYYY-MM-DD format.
+        time (str | None): Optional time in HH:MM format.
     """
     text: str
+    date: str | None = None
+    time: str | None = None
 
 class PromptIn(BaseModel):
     text: str
@@ -103,28 +105,47 @@ class PromptIn(BaseModel):
 async def api_add_task(payload: TaskIn):
     if not payload.text or not payload.text.strip():
         raise HTTPException(status_code=400, detail="text required")
+    
+    # Construct full text with date and time if provided
+    full_text = payload.text.strip()
+    if payload.date or payload.time:
+        datetime_str = ""
+        if payload.date and payload.time:
+            datetime_str = f" at {payload.time} on {payload.date}"
+        elif payload.date:
+            datetime_str = f" on {payload.date}"
+        elif payload.time:
+            datetime_str = f" at {payload.time}"
+        full_text += datetime_str
+    
     now = datetime.now()
-    scheduled = parse_time_from_text(payload.text, now=now)
-    entry = add_task(store, namespace, payload.text, scheduled_dt=scheduled)
-    reply = await safe_agent_invoke(f"Store this memory: {payload.text}")
-    return {"entry": entry, "reply": reply}
+    scheduled = parse_time_from_text(full_text, now=now)
+
+    memory_id = str(uuid.uuid4())
+    memory = {"task": full_text}
+    store.put(namespace, memory_id, memory)
+
+    print("adding")
+    print(store.search(namespace))
+    print()
+    
+    entry = add_task(memory_id, namespace, full_text, scheduled_dt=scheduled)
+
+    # reply = await safe_agent_invoke(f"Store this memory: {full_text}")
+    return {"entry": entry, "reply": "Task added."}
 
 @app.post("/api/prompt")
 async def api_prompt(payload: PromptIn):
     if not payload.text or not payload.text.strip():
         raise HTTPException(status_code=400, detail="text required")
-    messages = [
-    (
-        "system",
-        "You are a helpful assistant. the response should be in plain text without any markdown formatting.",
-    ),
-    ("human", payload.text),
-]
-    ai_msg = model.invoke(messages)
     
-    return ai_msg.text
-
-
+    print("hello")
+    result = agent.invoke(
+        {"messages": [{"role": "user", "content": payload.text}]}
+    )
+    
+    msg = result["messages"][-1].content
+    return msg
 
 @app.get("/api/reminders")
 async def api_check_reminders(window: int = Query(60, gt=0)):
@@ -182,38 +203,21 @@ async def api_check_reminders(window: int = Query(60, gt=0)):
         return {"message": "No scheduled reminders. Unscheduled tasks: " + "; ".join(unscheduled), "all": all_tasks_sorted}
     return {"message": "No reminders scheduled.", "all": all_tasks_sorted}
 
-# server-session notified set to avoid repeated notifications during a session
-_notified = set()
-AUTO_WINDOW_MINUTES = 5
-
-@app.get("/api/notifications")
-async def api_notifications():
-    now = datetime.now()
-    tasks = get_tasks(namespace)
-    out = []
-    for t in tasks:
-        sched = t.get("scheduled")
-        if not sched:
-            continue
-        try:
-            dt = datetime.fromisoformat(sched)
-        except Exception:
-            continue
-        key = (t.get("id"), sched)
-        if key in _notified:
-            continue
-        if dt <= now:
-            out.append({"type": "overdue", "text": t["text"], "at": dt.isoformat()})
-            _notified.add(key)
-        elif dt <= now + timedelta(minutes=AUTO_WINDOW_MINUTES):
-            out.append({"type": "upcoming", "text": t["text"], "at": dt.isoformat()})
-            _notified.add(key)
-    return {"notifications": out}
-
 # new endpoint to delete a task by id
 @app.delete("/api/tasks/{task_id}")
 async def api_delete_task(task_id: str):
-    ok = delete_task(store, namespace, task_id)
+    print("before deleting")
+    print(store.search(namespace))
+    print()
+
+    store.delete(namespace, task_id)
+
+    print("after deleting")
+    print(store.search(namespace))
+    print()
+
+    ok = delete_task(namespace, task_id)
+    
     if not ok:
         raise HTTPException(status_code=404, detail="task not found")
     return {"deleted": True}

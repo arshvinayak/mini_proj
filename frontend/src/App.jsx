@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { addTask, deleteTask, getNotifications, getReminders, send_prompt } from "./api";
-import "./styles.css";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { addTask, deleteTask, getReminders, send_prompt } from "./api";
+import "./styles.css";
 
 export default function App() {
-  const [text, setText] = useState("");
+  const [message, setMessage] = useState("");
+  const [date, setDate] = useState("");
+  const [time, setTime] = useState("");
   const [status, setStatus] = useState("");
   const [reminders, setReminders] = useState("");
   const [notifications, setNotifications] = useState([]);
@@ -28,31 +30,7 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Notification polling
-  useEffect(() => {
-    if (typeof Notification !== "undefined" && Notification.permission !== "granted") {
-      Notification.requestPermission();
-    }
 
-    const id = setInterval(async () => {
-      try {
-        const r = await getNotifications();
-        if (r?.notifications?.length) {
-          setNotifications((prev) => [...r.notifications.reverse(), ...prev]);
-          setNotifCount((c) => c + r.notifications.length);
-          r.notifications.forEach((n) => {
-            if (Notification.permission === "granted") {
-              new Notification(n.type === "overdue" ? "Overdue reminder" : "Upcoming reminder", {
-                body: `${n.text} • ${new Date(n.at).toLocaleString()}`,
-              });
-            }
-          });
-        }
-      } catch (e) {}
-    }, 1000 * 25);
-
-    return () => clearInterval(id);
-  }, []);
 
   useEffect(() => {
     if (notifRef.current) {
@@ -64,15 +42,35 @@ export default function App() {
 
   async function handleAdd(e) {
     e.preventDefault();
-    if (!text.trim()) {
-      setStatus("Please enter a task.");
+    if (!message.trim()) {
+      setStatus("Please enter a task message.");
       return;
     }
+    
+    let fullText = message.trim();
+    if (date || time) {
+      let dateTimeStr = "";
+      if (date && time) {
+        dateTimeStr = ` at ${time} on ${date}`;
+      } else if (date) {
+        dateTimeStr = ` on ${date}`;
+      } else if (time) {
+        dateTimeStr = ` at ${time}`;
+      }
+      fullText += dateTimeStr;
+    }
+    
     setStatus("Saving...");
     try {
-      const res = await addTask(text);
+      const res = await addTask({
+        text: message.trim(),
+        date: date || null,
+        time: time || null
+      });
       setStatus(res.reply || "Saved");
-      setText("");
+      setMessage("");
+      setDate("");
+      setTime("");
       setTimeout(() => handleCheck(), 400);
     } catch (err) {
       setStatus("Error saving");
@@ -186,12 +184,44 @@ export default function App() {
         <section className="card input-card">
           <form onSubmit={handleAdd}>
             <label className="label">Add a task</label>
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="e.g. Doctor appointment at 5pm tomorrow"
-              className="task-input"
-            />
+            
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", fontSize: "0.9em", marginBottom: 4, fontWeight: 500 }}>
+                Task message *
+              </label>
+              <textarea
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="e.g. Doctor appointment"
+                className="task-input"
+              />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <div>
+                <label style={{ display: "block", fontSize: "0.9em", marginBottom: 4, fontWeight: 500 }}>
+                  Date
+                </label>
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  style={{ width: "100%", padding: "8px", border: "1px solid rgba(255,255,255,0.03)", borderRadius: "10px", fontSize: "1em", background: "rgba(255,255,255,0.04)", color: "inherit" }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "0.9em", marginBottom: 4, fontWeight: 500 }}>
+                  Time
+                </label>
+                <input
+                  type="time"
+                  value={time}
+                  onChange={(e) => setTime(e.target.value)}
+                  style={{ width: "100%", padding: "8px", border: "1px solid rgba(255,255,255,0.03)", borderRadius: "10px", fontSize: "1em", background: "rgba(255,255,255,0.04)", color: "inherit" }}
+                />
+              </div>
+            </div>
+
             <div className="row">
               <button className="btn primary" type="submit">Add Task</button>
               <button className="btn ghost" type="button" onClick={handleCheck}>

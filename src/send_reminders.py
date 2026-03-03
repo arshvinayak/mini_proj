@@ -2,6 +2,7 @@
 Standalone background reminder sender.
 Checks memories.json every 5 minutes and sends email when task time is reached.
 Run this in a separate terminal / process / as a service.
+python send_reminders.py "2026-03-03 08:23:00"
 """
 
 import json
