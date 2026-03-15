@@ -25,13 +25,6 @@ export default function App() {
   const messagesEndRef = useRef(null);
   const notifRef = useRef(null);
 
-  // Auto-scroll chat
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-
-
   useEffect(() => {
     if (notifRef.current) {
       notifRef.current.classList.remove("pulse");

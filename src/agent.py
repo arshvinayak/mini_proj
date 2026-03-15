@@ -12,9 +12,10 @@ import os
 import asyncio
 import sys
 from datetime import datetime, timedelta
+import time
 
 # new helper module (use absolute import so agent.py can be run directly)
-from memory_store import add_task, get_tasks, parse_time_from_text, delete_task
+from memory_store import add_task, get_tasks, delete_task
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
@@ -41,10 +42,6 @@ agent = create_agent(model,
                     tools=tools, 
                     store=store, 
                     system_prompt="You are a helpful dementia patient assistant. help me with reminding of the daily tasks.")
-
-print()
-print(store.search(namespace))
-print()
 
 # FastAPI app
 app = FastAPI()
@@ -108,6 +105,8 @@ async def api_add_task(payload: TaskIn):
     
     # Construct full text with date and time if provided
     full_text = payload.text.strip()
+    scheduled = None
+    
     if payload.date or payload.time:
         datetime_str = ""
         if payload.date and payload.time:
@@ -117,17 +116,20 @@ async def api_add_task(payload: TaskIn):
         elif payload.time:
             datetime_str = f" at {payload.time}"
         full_text += datetime_str
-    
-    now = datetime.now()
-    scheduled = parse_time_from_text(full_text, now=now)
+        
+        # Construct scheduled datetime from explicit date/time fields
+        try:
+            if payload.date and payload.time:
+                scheduled = datetime.fromisoformat(f"{payload.date}T{payload.time}")
+            elif payload.date:
+                scheduled = datetime.fromisoformat(f"{payload.date}T00:00")
+        except ValueError:
+            # If date format is invalid, leave scheduled as None
+            pass
 
     memory_id = str(uuid.uuid4())
     memory = {"task": full_text}
     store.put(namespace, memory_id, memory)
-
-    print("adding")
-    print(store.search(namespace))
-    print()
     
     entry = add_task(memory_id, namespace, full_text, scheduled_dt=scheduled)
 
@@ -139,10 +141,12 @@ async def api_prompt(payload: PromptIn):
     if not payload.text or not payload.text.strip():
         raise HTTPException(status_code=400, detail="text required")
     
-    print("hello")
+    start_time = time.time()
     result = agent.invoke(
         {"messages": [{"role": "user", "content": payload.text}]}
     )
+    end_time = time.time()
+    print(f"latency: {end_time - start_time}")
     
     msg = result["messages"][-1].content
     return msg
@@ -206,15 +210,7 @@ async def api_check_reminders(window: int = Query(60, gt=0)):
 # new endpoint to delete a task by id
 @app.delete("/api/tasks/{task_id}")
 async def api_delete_task(task_id: str):
-    print("before deleting")
-    print(store.search(namespace))
-    print()
-
     store.delete(namespace, task_id)
-
-    print("after deleting")
-    print(store.search(namespace))
-    print()
 
     ok = delete_task(namespace, task_id)
     

@@ -66,42 +66,6 @@ def get_tasks(namespace):
     all_data = _read_all()
     return all_data.get(str(namespace), [])
 
-def parse_time_from_text(text, now=None):
-    """
-    Very small heuristic parser:
-      - matches 'at 5pm', '5pm', '5:30pm', '17:00', 'at 17', optionally with 'tomorrow'
-    Returns a datetime (local) or None.
-    """
-    now = now or datetime.now()
-    txt = text.lower()
-    is_tomorrow = "tomorrow" in txt
-    # 12-hour with am/pm
-    m = re.search(r'(\b|^)at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b', txt)
-    if not m:
-        m = re.search(r'(\b|^)(\d{1,2})(?::(\d{2}))\s*(am|pm)\b', txt)
-    if m:
-        hour = int(m.group(2))
-        minute = int(m.group(3) or 0)
-        ampm = m.group(4)
-        if ampm == "pm" and hour != 12:
-            hour += 12
-        if ampm == "am" and hour == 12:
-            hour = 0
-        day = now.date()
-        if is_tomorrow:
-            day = day.fromordinal(day.toordinal() + 1)
-        return datetime.combine(day, datetime.min.time()).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    # 24-hour match like 17:00 or 'at 17' or '17'
-    m2 = re.search(r'(\b|^)(?:at\s+)?(\d{1,2})(?::(\d{2}))?\b', txt)
-    if m2:
-        hour = int(m2.group(2))
-        minute = int(m2.group(3) or 0)
-        if 0 <= hour < 24:
-            day = now.date()
-            if is_tomorrow:
-                day = day.fromordinal(day.toordinal() + 1)
-            return datetime.combine(day, datetime.min.time()).replace(hour=hour, minute=minute, second=0, microsecond=0)
-    return None
 
 def delete_task(namespace, task_id):
     """
