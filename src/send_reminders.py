@@ -48,7 +48,7 @@ SMTP_PORT       = 465
 NAMESPACE   = "('2', 'memories')"   # must match your agent.py  
 MEMORY_FILE = Path("/workspaces/mini_proj/data/memories.json")  # adjust if needed
 
-CHECK_INTERVAL_SECONDS = 60   # 5 minutes
+CHECK_INTERVAL_SECONDS = 60   # 1 minutes
 GRACE_PERIOD_MINUTES   = 15    # consider task "due" up to 15 min in future too
 
 # ──────────────────────────────────────────────
@@ -121,10 +121,6 @@ def process_reminders():
     sent_count = 0
 
     for task in tasks:
-        # Skip already sent
-        if task.get("sent", False):
-            continue
-
         sched_str = task.get("scheduled")
         if not sched_str:
             continue
@@ -134,23 +130,51 @@ def process_reminders():
         except:
             continue
 
-        # Task is due now or soon / already overdue
-        if due <= now + datetime.timedelta(minutes=GRACE_PERIOD_MINUTES):
-            is_overdue = due < now
-            subject = "🔔 Overdue Reminder" if is_overdue else "⏰ Reminder"
-            
-            when_text = f"was due {due:%-I:%M %p}" if is_overdue else f"due at {due:%-I:%M %p}"
-            
+        time_diff_seconds = (due - now).total_seconds()
+        grace_seconds = GRACE_PERIOD_MINUTES * 60
+
+        # Pre-reminder: before due time (within grace period, 0-15 min before)
+        if 0 < time_diff_seconds <= grace_seconds and not task.get("pre_reminder_sent", False):
+            subject = "⏰ Reminder"
             body = (
                 f"Hello,\n\n"
                 f"→ {task.get('text', '(no description)')}\n"
-                f"   {when_text}\n\n"
+                f"   due at {due:%-I:%M %p}\n\n"
                 f"Dementia Assistant\n"
             )
-
             if send_email(subject, body):
-                task["sent"] = True
-                task["sent_at"] = datetime.datetime.now().isoformat()
+                task["pre_reminder_sent"] = True
+                task["pre_reminder_sent_at"] = datetime.datetime.now().isoformat()
+                updated = True
+                sent_count += 1
+
+        # At-reminder: at/around due time (within 1 minute before/after)
+        elif -60 <= time_diff_seconds <= 0 and not task.get("at_reminder_sent", False):
+            subject = "⏰ Task Time"
+            body = (
+                f"Hello,\n\n"
+                f"→ {task.get('text', '(no description)')}\n"
+                f"   due now at {due:%-I:%M %p}\n\n"
+                f"Dementia Assistant\n"
+            )
+            if send_email(subject, body):
+                task["at_reminder_sent"] = True
+                task["at_reminder_sent_at"] = datetime.datetime.now().isoformat()
+                updated = True
+                sent_count += 1
+
+        # Post-reminder: after due time (1-15 min after)
+        elif -grace_seconds <= time_diff_seconds < -60 and not task.get("post_reminder_sent", False):
+            subject = "🔔 Overdue Reminder"
+            body = (
+                f"Hello,\n\n"
+                f"→ {task.get('text', '(no description)')}\n"
+                f"   was due {due:%-I:%M %p}\n\n"
+                f"Dementia Assistant\n"
+            )
+            if send_email(subject, body):
+                task["post_reminder_sent"] = True
+                task["post_reminder_sent_at"] = datetime.datetime.now().isoformat()
                 updated = True
                 sent_count += 1
 
