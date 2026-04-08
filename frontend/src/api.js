@@ -42,3 +42,29 @@ export async function send_prompt(prompt) {
   
   return res.json();
 }
+
+// Medication management
+export async function addMedication(medicationData) {
+  const res = await fetch(`${BASE}/medications`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(medicationData),
+  });
+  return res.json();
+}
+
+export async function getMedications() {
+  const res = await fetch(`${BASE}/medications`);
+  return res.json();
+}
+
+export async function deleteMedication(medId) {
+  const res = await fetch(`${BASE}/medications/${encodeURIComponent(medId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error("Delete failed: " + (txt || res.status));
+  }
+  return res.json();
+}

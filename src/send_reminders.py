@@ -68,6 +68,20 @@ def load_tasks():
         return []
 
 
+def load_medications():
+    """Read medications from memories.json"""
+    if not MEMORY_FILE.is_file():
+        return []
+
+    try:
+        with open(MEMORY_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        return data.get("medications", [])
+    except Exception as e:
+        print(f"Error reading medications: {e}")
+        return []
+
+
 def save_tasks(tasks):
     """Write updated tasks back (with sent flag)"""
     try:
@@ -82,6 +96,22 @@ def save_tasks(tasks):
         print("Updated sent flags in memories.json")
     except Exception as e:
         print(f"Error saving tasks: {e}")
+
+
+def save_medications(medications):
+    """Write updated medications back (with sent flag)"""
+    try:
+        with open(MEMORY_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        
+        data["medications"] = medications
+        
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, default=str)
+            
+        print("Updated medication reminder flags in memories.json")
+    except Exception as e:
+        print(f"Error saving medications: {e}")
 
 
 def send_email(subject: str, body: str):
@@ -187,6 +217,100 @@ def process_reminders():
     )
 
 
+def process_medication_reminders():
+    """Check medications and send email reminders for scheduled times"""
+    now = datetime.datetime.now()
+    medications = load_medications()
+    if not medications:
+        return
+
+    updated = False
+    sent_count = 0
+    
+    # Get current day of week name
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    today = day_names[now.weekday()]
+
+    for med in medications:
+        # Check if medication applies today
+        frequency = med.get("frequency", "daily")
+        med_days = med.get("days", [])
+        
+        # Skip if custom frequency and today is not in the list
+        if frequency == "custom" and today not in med_days:
+            continue
+        
+        # Process each time for this medication
+        med_times = med.get("times", [])
+        for med_time_str in med_times:
+            try:
+                # Parse HH:MM format
+                med_hour, med_minute = map(int, med_time_str.split(":"))
+                med_datetime = now.replace(hour=med_hour, minute=med_minute, second=0, microsecond=0)
+            except:
+                continue
+            
+            time_diff_seconds = (med_datetime - now).total_seconds()
+            grace_seconds = GRACE_PERIOD_MINUTES * 60
+            
+            # Create a unique key for this medication + time combination
+            reminder_key = f"{med.get('id')}_{med_time_str}"
+            
+            # Pre-reminder: before due time (within grace period, 0-15 min before)
+            if 0 < time_diff_seconds <= grace_seconds and not med.get(f"pre_reminder_{reminder_key}", False):
+                subject = "💊 Medication Reminder"
+                body = (
+                    f"Hello,\n\n"
+                    f"💊 {med.get('name', 'Medication')}\n"
+                    f"   due at {med_hour:02d}:{med_minute:02d}\n\n"
+                    f"Dementia Assistant\n"
+                )
+                if send_email(subject, body):
+                    med[f"pre_reminder_{reminder_key}"] = True
+                    med[f"pre_reminder_{reminder_key}_at"] = datetime.datetime.now().isoformat()
+                    updated = True
+                    sent_count += 1
+            
+            # At-reminder: at/around due time (within 1 minute before/after)
+            elif -60 <= time_diff_seconds <= 0 and not med.get(f"at_reminder_{reminder_key}", False):
+                subject = "💊 Time for Medication"
+                body = (
+                    f"Hello,\n\n"
+                    f"💊 {med.get('name', 'Medication')}\n"
+                    f"   due now at {med_hour:02d}:{med_minute:02d}\n\n"
+                    f"Dementia Assistant\n"
+                )
+                if send_email(subject, body):
+                    med[f"at_reminder_{reminder_key}"] = True
+                    med[f"at_reminder_{reminder_key}_at"] = datetime.datetime.now().isoformat()
+                    updated = True
+                    sent_count += 1
+            
+            # Post-reminder: after due time (1-15 min after)
+            elif -grace_seconds <= time_diff_seconds < -60 and not med.get(f"post_reminder_{reminder_key}", False):
+                subject = "💊 Overdue Medication"
+                body = (
+                    f"Hello,\n\n"
+                    f"💊 {med.get('name', 'Medication')}\n"
+                    f"   was due at {med_hour:02d}:{med_minute:02d}\n\n"
+                    f"Dementia Assistant\n"
+                )
+                if send_email(subject, body):
+                    med[f"post_reminder_{reminder_key}"] = True
+                    med[f"post_reminder_{reminder_key}_at"] = datetime.datetime.now().isoformat()
+                    updated = True
+                    sent_count += 1
+    
+    if updated:
+        save_medications(medications)
+    
+    print(
+        f"{now:%Y-%m-%d %H:%M:%S}  "
+        f"Checked {len(medications)} medications → sent {sent_count} reminder(s)"
+    )
+
+
+
 def main():
     print("Reminder background service started")
     print(datetime.datetime.now().strftime("Started at %Y-%m-%d %H:%M:%S"))
@@ -198,6 +322,7 @@ def main():
     while True:
         try:
             process_reminders()
+            process_medication_reminders()
         except KeyboardInterrupt:
             print("\nStopped by user.")
             break

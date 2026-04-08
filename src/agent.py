@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 import time
 
 # new helper module (use absolute import so agent.py can be run directly)
-from memory_store import add_task, get_tasks, delete_task
+from memory_store import add_task, get_tasks, delete_task, add_medication, get_medications, delete_medication
 
 # Load environment variables from .env file
 from dotenv import load_dotenv
@@ -97,6 +97,21 @@ class TaskIn(BaseModel):
 
 class PromptIn(BaseModel):
     text: str
+
+class MedicationIn(BaseModel):
+    """
+    Model for incoming medication requests.
+    
+    Attributes:
+        name (str): Name of the medication.
+        times (list[str]): Times to take medication (e.g., ["08:00", "14:00"]).
+        frequency (str): "daily" or "custom".
+        days (list[str]): Days to take medication (e.g., ["Monday", "Wednesday"]).
+    """
+    name: str
+    times: list[str]
+    frequency: str = "daily"
+    days: list[str] | None = None
 
 @app.post("/api/tasks")
 async def api_add_task(payload: TaskIn):
@@ -216,6 +231,49 @@ async def api_delete_task(task_id: str):
     
     if not ok:
         raise HTTPException(status_code=404, detail="task not found")
+    return {"deleted": True}
+
+
+# ──────────────────────────────────────────────
+#          MEDICATION ENDPOINTS
+# ──────────────────────────────────────────────
+
+@app.post("/api/medications")
+async def api_add_medication(payload: MedicationIn):
+    if not payload.name or not payload.name.strip():
+        raise HTTPException(status_code=400, detail="name required")
+    
+    if not payload.times or len(payload.times) == 0:
+        raise HTTPException(status_code=400, detail="at least one time required")
+    
+    med_id = str(uuid.uuid4())
+    entry = add_medication(
+        med_id,
+        name=payload.name.strip(),
+        times=payload.times,
+        days=payload.days or [],
+        frequency=payload.frequency or "daily"
+    )
+
+    memory_id = str(uuid.uuid4())
+    memory = {"medicine": f"{payload.name.strip()}, {', '.join(payload.times)}, {', '.join(payload.days or [])}, {', '.join(payload.frequency or 'daily')}"}
+    store.put(namespace, memory_id, memory)
+    
+    return {"entry": entry, "reply": f"Medication '{payload.name}' added."}
+
+
+@app.get("/api/medications")
+async def api_get_medications():
+    medications = get_medications()
+    return {"medications": medications}
+
+
+@app.delete("/api/medications/{med_id}")
+async def api_delete_medication(med_id: str):
+    ok = delete_medication(med_id)
+    
+    if not ok:
+        raise HTTPException(status_code=404, detail="medication not found")
     return {"deleted": True}
 
 

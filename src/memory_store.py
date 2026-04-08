@@ -108,3 +108,57 @@ def delete_task(namespace, task_id):
         _write_all(all_data)
     
     return True
+
+
+# ──────────────────────────────────────────────
+#           MEDICATION MANAGEMENT
+# ──────────────────────────────────────────────
+MEDICATIONS_KEY = "medications"
+
+def add_medication(med_id, name, times, days=None, frequency="daily"):
+    """
+    Add a medication reminder.
+    
+    Args:
+        med_id: unique identifier for this medication
+        name: medication name
+        times: list of times (e.g., ["08:00", "14:00"])
+        days: list of day names (e.g., ["Monday", "Friday"]) - only used if frequency != "daily"
+        frequency: "daily" or "custom"
+    
+    Returns:
+        The medication entry
+    """
+    entry = {
+        "id": med_id,
+        "name": name,
+        "times": times,
+        "days": days or [],
+        "frequency": frequency,
+        "created_at": datetime.now().isoformat()
+    }
+    all_data = _read_all()
+    all_data.setdefault(MEDICATIONS_KEY, []).append(entry)
+    _write_all(all_data)
+    return entry
+
+
+def get_medications():
+    """Get all medications."""
+    all_data = _read_all()
+    return all_data.get(MEDICATIONS_KEY, [])
+
+
+def delete_medication(med_id):
+    """
+    Remove a medication by id.
+    Returns True if deleted, False if not found.
+    """
+    all_data = _read_all()
+    items = all_data.get(MEDICATIONS_KEY, [])
+    new_items = [item for item in items if item.get("id") != med_id]
+    if len(new_items) < len(items):
+        all_data[MEDICATIONS_KEY] = new_items
+        _write_all(all_data)
+        return True
+    return False
